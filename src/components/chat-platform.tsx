@@ -75,7 +75,12 @@ function createInviteCode() {
   return Array.from(bytes, (value) => chars[value % chars.length]).join("");
 }
 
-function createServerSeed(name: string, description: string, ownerId: string) {
+function createServerSeed(
+  name: string,
+  description: string,
+  ownerId: string,
+  imageUrl?: string | null,
+) {
   const id = `server-${toSlug(name)}-${createInviteCode().slice(0, 4).toLowerCase()}`;
   const channelId = `channel-${createInviteCode().slice(0, 6).toLowerCase()}`;
   const inviteCode = createInviteCode();
@@ -87,6 +92,7 @@ function createServerSeed(name: string, description: string, ownerId: string) {
       description,
       inviteCode,
       ownerId,
+      imageUrl: imageUrl ?? null,
       theme: "night" as ThemeKey,
       createdAt: new Date().toISOString(),
       memberCount: 1,
@@ -301,6 +307,46 @@ function Avatar({ name, role, avatarUrl }: { name: string; role: string; avatarU
   );
 }
 
+function ServerIcon({
+  name,
+  imageUrl,
+  theme,
+  className,
+  textClassName = "text-lg",
+}: {
+  name: string;
+  imageUrl?: string | null;
+  theme: ThemeKey;
+  className?: string;
+  textClassName?: string;
+}) {
+  const activeTheme = themeCatalog[theme];
+
+  if (imageUrl) {
+    return (
+      <div
+        className={cn("overflow-hidden rounded-2xl border border-white/10 bg-black/20 shadow-lg", className)}
+      >
+        <img src={imageUrl} alt={name} className="h-full w-full object-cover" />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-center rounded-2xl text-white shadow-lg",
+        className,
+      )}
+      style={{
+        background: `linear-gradient(135deg, ${activeTheme.accent}, ${activeTheme.glow})`,
+      }}
+    >
+      <span className={cn("font-semibold", textClassName)}>{name.slice(0, 1).toUpperCase()}</span>
+    </div>
+  );
+}
+
 function SectionCard({
   title,
   icon,
@@ -354,6 +400,14 @@ export function ChatPlatform() {
   );
   const [createServerName, setCreateServerName] = useState("");
   const [createServerDescription, setCreateServerDescription] = useState("");
+  const [serverImageUrl, setServerImageUrl] = useState<string | null>(null);
+  const [serverImageBusy, setServerImageBusy] = useState(false);
+  const [serverSettingsName, setServerSettingsName] = useState("");
+  const [serverSettingsDescription, setServerSettingsDescription] = useState("");
+  const [serverSettingsTheme, setServerSettingsTheme] = useState<ThemeKey>("night");
+  const [serverSettingsImageUrl, setServerSettingsImageUrl] = useState<string | null>(null);
+  const [serverSettingsDirty, setServerSettingsDirty] = useState(false);
+  const [serverSettingsBusy, setServerSettingsBusy] = useState(false);
   const [joinInvite, setJoinInvite] = useState("");
   const [moderationTarget, setModerationTarget] = useState("");
   const [moderationTitle, setModerationTitle] = useState("");
@@ -483,6 +537,27 @@ export function ChatPlatform() {
     };
   }, [activeChannels.length, currentServer, workspace.memberships]);
 
+  const serverSettingsDraft = useMemo(() => {
+    return {
+      name: serverSettingsDirty ? serverSettingsName : currentServer?.name ?? "",
+      description: serverSettingsDirty
+        ? serverSettingsDescription
+        : currentServer?.description ?? "",
+      theme: serverSettingsDirty ? serverSettingsTheme : currentServer?.theme ?? "night",
+      imageUrl: serverSettingsDirty ? serverSettingsImageUrl : currentServer?.imageUrl ?? null,
+    };
+  }, [
+    currentServer?.description,
+    currentServer?.imageUrl,
+    currentServer?.name,
+    currentServer?.theme,
+    serverSettingsDescription,
+    serverSettingsDirty,
+    serverSettingsImageUrl,
+    serverSettingsName,
+    serverSettingsTheme,
+  ]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -496,10 +571,35 @@ export function ChatPlatform() {
     };
   }, [pendingPreview?.url]);
 
-  async function syncWorkspaceFromSupabase(userId: string) {
+  async function syncWorkspaceFromSupabase(
+    userId: string,
+    fallbackUser?: { email?: string | null; user_metadata?: Record<string, unknown> | null },
+  ) {
     if (!supabase) {
       return;
     }
+
+    const fallbackUsername = normalizeUsername(
+      String(fallbackUser?.user_metadata?.username ?? fallbackUser?.email ?? "guest").split("@")[0],
+    );
+    const fallbackGlobalRole =
+      fallbackUsername.toLowerCase() === "raga"
+        ? ("primal_lead" as const)
+        : fallbackUsername.toLowerCase() === "kaysss"
+          ? ("primal" as const)
+          : ("member" as const);
+
+    const fallbackProfile: Profile = {
+      id: userId,
+      uid: `AETHER-${userId.slice(0, 6).toUpperCase()}`,
+      username: fallbackUsername,
+      displayName: normalizeUsername(fallbackUsername),
+      globalRole: fallbackGlobalRole,
+      title: fallbackGlobalRole === "member" ? null : "Team Primals",
+      titleColor: fallbackGlobalRole === "member" ? null : "#ffd0df",
+      avatarUrl: (fallbackUser?.user_metadata?.avatar_url as string | null | undefined) ?? null,
+      createdAt: new Date().toISOString(),
+    };
 
     try {
       const [
@@ -510,7 +610,7 @@ export function ChatPlatform() {
         messagesResult,
         dmsResult,
         settingsResult,
-      ] = await Promise.all([
+      ] = await Promise.allSettled([
         supabase.from("profiles").select("*").order("created_at", { ascending: true }),
         supabase.from("servers").select("*").order("created_at", { ascending: true }),
         supabase.from("channels").select("*").order("position", { ascending: true }),
@@ -521,14 +621,43 @@ export function ChatPlatform() {
           .gte("created_at", new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString())
           .order("created_at", { ascending: true }),
         supabase.from("dm_threads").select("*").order("last_message_at", { ascending: false }),
-        supabase.from("platform_settings").select("*").limit(1).single(),
+        supabase.from("platform_settings").select("*").limit(1).maybeSingle(),
       ]);
 
-      if (profilesResult.error || serversResult.error || channelsResult.error || membershipsResult.error || messagesResult.error || dmsResult.error) {
-        throw profilesResult.error ?? serversResult.error ?? channelsResult.error ?? membershipsResult.error ?? messagesResult.error ?? dmsResult.error;
-      }
+      const profilesPayload =
+        profilesResult.status === "fulfilled" && !profilesResult.value.error
+          ? profilesResult.value.data ?? []
+          : [];
+      const serversPayload =
+        serversResult.status === "fulfilled" && !serversResult.value.error
+          ? serversResult.value.data ?? []
+          : [];
+      const channelsPayload =
+        channelsResult.status === "fulfilled" && !channelsResult.value.error
+          ? channelsResult.value.data ?? []
+          : [];
+      const membershipsPayload =
+        membershipsResult.status === "fulfilled" && !membershipsResult.value.error
+          ? membershipsResult.value.data ?? []
+          : [];
+      const messagesPayload =
+        messagesResult.status === "fulfilled" && !messagesResult.value.error
+          ? messagesResult.value.data ?? []
+          : [];
+      const dmsPayload =
+        dmsResult.status === "fulfilled" && !dmsResult.value.error
+          ? dmsResult.value.data ?? []
+          : [];
+      const settingsRow =
+        settingsResult.status === "fulfilled" && !settingsResult.value.error && settingsResult.value.data
+          ? settingsResult.value.data
+          : {
+              theme: "night",
+              last_changed_at: null,
+              last_changed_by: null,
+            };
 
-      const profiles = (profilesResult.data ?? []).map((row) => ({
+      const profiles = profilesPayload.map((row) => ({
         id: row.id,
         uid: row.uid ?? `AETHER-${row.id.slice(0, 6).toUpperCase()}`,
         username: row.username,
@@ -543,19 +672,22 @@ export function ChatPlatform() {
         createdAt: row.created_at,
       })) satisfies Profile[];
 
-      const servers = (serversResult.data ?? []).map((row) => ({
+      const hydratedProfiles = profiles.length > 0 ? profiles : [fallbackProfile];
+
+      const servers = serversPayload.map((row) => ({
         id: row.id,
         name: row.name,
         description: row.description ?? "",
         inviteCode: row.invite_code,
         ownerId: row.owner_id,
+        imageUrl: row.image_url,
         theme: normalizeThemeKey(row.theme),
         createdAt: row.created_at,
         memberCount: 0,
         channelCount: 0,
       })) satisfies ServerRecord[];
 
-      const channels = (channelsResult.data ?? []).map((row) => ({
+      const channels = channelsPayload.map((row) => ({
         id: row.id,
         serverId: row.server_id,
         name: row.name,
@@ -565,7 +697,7 @@ export function ChatPlatform() {
         createdAt: row.created_at,
       })) satisfies ChannelRecord[];
 
-      const memberships = (membershipsResult.data ?? []).map((row) => ({
+      const memberships = membershipsPayload.map((row) => ({
         serverId: row.server_id,
         userId: row.user_id,
         role: row.role,
@@ -576,8 +708,8 @@ export function ChatPlatform() {
         createdAt: row.created_at,
       })) satisfies ServerMembership[];
 
-      const messages = (messagesResult.data ?? []).map((row) => {
-        const author = profiles.find((profile) => profile.id === row.author_id);
+      const messages = messagesPayload.map((row) => {
+        const author = hydratedProfiles.find((profile) => profile.id === row.author_id);
         return {
           id: row.id,
           serverId: row.server_id,
@@ -597,7 +729,7 @@ export function ChatPlatform() {
         } satisfies ChatMessage;
       });
 
-      const dmThreads = (dmsResult.data ?? []).map((row) => ({
+      const dmThreads = dmsPayload.map((row) => ({
         id: row.id,
         memberIds: [row.member_a_id, row.member_b_id],
         name: row.name ?? "Personal Messages",
@@ -605,18 +737,16 @@ export function ChatPlatform() {
         lastMessageAt: row.last_message_at,
       })) satisfies DMThread[];
 
-      const settingsRow = settingsResult.data ?? {
-        theme: "night",
-      };
-
-      const sessionProfile = profiles.find((profile) => profile.id === userId);
+      const sessionProfile = hydratedProfiles.find((profile) => profile.id === userId);
 
       setWorkspace({
         currentUser: sessionProfile ?? workspace.currentUser,
-        profiles,
+        profiles: hydratedProfiles,
         servers: servers.map((server) => ({
           ...server,
-          memberCount: memberships.filter((membership) => membership.serverId === server.id).length,
+          memberCount: memberships.length > 0
+            ? memberships.filter((membership) => membership.serverId === server.id).length
+            : 0,
           channelCount: channels.filter((channel) => channel.serverId === server.id).length,
         })),
         channels,
@@ -635,12 +765,36 @@ export function ChatPlatform() {
 
       if (sessionProfile) {
         setSessionUserId(sessionProfile.id);
+      } else if (fallbackProfile) {
+        setSessionUserId(fallbackProfile.id);
       }
 
       setLoadingState("ready");
-    } catch {
-      setLoadingState("demo");
-      setNotice("Integrated database sync is not ready yet, so the app is using the built-in demo workspace.");
+    } catch (error) {
+      setWorkspace((current) => ({
+        ...current,
+        currentUser: fallbackProfile,
+        profiles: [fallbackProfile],
+        servers: [],
+        channels: [],
+        memberships: [],
+        messages: [],
+        dms: [],
+        platformSettings: {
+          theme: "night",
+          lastChangedAt: null,
+          lastChangedBy: null,
+        },
+        platformBans: [],
+        themeCooldownUntil: 0,
+        themeCooldownBy: null,
+      }));
+      setLoadingState("ready");
+      setNotice(
+        error instanceof Error
+          ? `Aether: ${error.message}`
+          : "Aether: integrated database sync hit a problem, so only your account loaded.",
+      );
     }
   }
 
@@ -663,7 +817,7 @@ export function ChatPlatform() {
         return;
       }
 
-      await syncWorkspaceFromSupabase(session.user.id);
+      await syncWorkspaceFromSupabase(session.user.id, session.user);
     };
 
     boot().catch(() => {
@@ -1313,37 +1467,183 @@ export function ChatPlatform() {
     }
   }
 
+  async function handleServerImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      queueNotice("Pick an image file for the server picture.");
+      return;
+    }
+
+    setServerImageBusy(true);
+    try {
+      const imageUrl = await fileToDataUrl(file);
+      setServerImageUrl(imageUrl);
+      queueNotice("Server picture ready.");
+    } catch {
+      queueNotice("Aether could not read that server picture.");
+    } finally {
+      setServerImageBusy(false);
+    }
+  }
+
+  async function handleServerSettingsImageUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      queueNotice("Pick an image file for the server picture.");
+      return;
+    }
+
+    setServerSettingsBusy(true);
+    try {
+      if (!serverSettingsDirty && currentServer) {
+        setServerSettingsName(currentServer.name);
+        setServerSettingsDescription(currentServer.description);
+        setServerSettingsTheme(currentServer.theme);
+        setServerSettingsImageUrl(currentServer.imageUrl ?? null);
+      }
+      setServerSettingsDirty(true);
+      const imageUrl = await fileToDataUrl(file);
+      setServerSettingsImageUrl(imageUrl);
+      queueNotice("Server picture updated in the editor.");
+    } catch {
+      queueNotice("Aether could not read that server picture.");
+    } finally {
+      setServerSettingsBusy(false);
+    }
+  }
+
+  async function saveServerSettings() {
+    if (!currentProfile || !currentServer) {
+      return;
+    }
+
+    if (!canUseModeratorPanel) {
+      queueNotice("Only owners, admins, or Primals can edit server settings.");
+      return;
+    }
+
+    const nextName = serverSettingsDraft.name.trim();
+    if (!nextName) {
+      queueNotice("Give the server a name first.");
+      return;
+    }
+
+    const nextDescription = serverSettingsDraft.description.trim() || "A private room for your friends.";
+
+    if (supabase && hasSupabaseConfig()) {
+      const { data: serverData, error } = await supabase
+        .from("servers")
+        .update({
+          name: nextName,
+          description: nextDescription,
+          image_url: serverSettingsDraft.imageUrl,
+          theme: serverSettingsDraft.theme,
+        })
+        .eq("id", currentServer.id)
+        .select("*")
+        .single();
+
+      if (error || !serverData) {
+        queueNotice(error?.message ?? "Aether could not save those server settings.");
+        return;
+      }
+
+      await syncWorkspaceFromSupabase(currentProfile.id);
+      setServerSettingsDirty(false);
+      setServerSettingsName(serverData.name ?? nextName);
+      setServerSettingsDescription(serverData.description ?? nextDescription);
+      setServerSettingsTheme(normalizeThemeKey(serverData.theme));
+      setServerSettingsImageUrl(serverData.image_url ?? null);
+      queueNotice(`Aether: ${serverData.name} settings saved.`);
+      return;
+    }
+
+    patchWorkspace((current) => ({
+      ...current,
+      servers: current.servers.map((server) =>
+        server.id === currentServer.id
+          ? {
+              ...server,
+              name: nextName,
+              description: nextDescription,
+              imageUrl: serverSettingsDraft.imageUrl,
+              theme: serverSettingsDraft.theme,
+            }
+          : server,
+      ),
+    }));
+
+    setServerSettingsDirty(false);
+    queueNotice(`Aether: ${nextName} settings saved.`);
+  }
+
+  function primeServerSettingsDraft() {
+    if (serverSettingsDirty || !currentServer) {
+      return;
+    }
+
+    setServerSettingsName(currentServer.name);
+    setServerSettingsDescription(currentServer.description);
+    setServerSettingsTheme(currentServer.theme);
+    setServerSettingsImageUrl(currentServer.imageUrl ?? null);
+    setServerSettingsDirty(true);
+  }
+
   async function authenticate() {
     if (!supabase || !hasSupabaseConfig()) {
       queueNotice("The integrated database is not configured yet, so continue with demo mode.");
       return;
     }
 
-    const email = usernameToEmail(username);
     startAuthTransition(async () => {
+      const normalizedUsername = normalizeUsername(username);
+      const email = usernameToEmail(normalizedUsername);
+
       const response =
         authMode === "signup"
-          ? await supabase.auth.signUp({
-              email,
-              password,
-              options: {
-                data: {
-                  username: normalizeUsername(username),
-                  avatar_url: signupAvatarUrl,
-                },
+          ? await fetch("/api/register", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
               },
+              body: JSON.stringify({
+                username: normalizedUsername,
+                password,
+                avatarUrl: signupAvatarUrl,
+              }),
+            }).then(async (res) => {
+              const payload = await res.json();
+              return {
+                ok: res.ok && payload.ok,
+                payload,
+              };
             })
-          : await supabase.auth.signInWithPassword({
-              email,
-              password,
-            });
+          : null;
 
-      if (response.error) {
-        queueNotice(response.error.message);
+      if (authMode === "signup") {
+        if (!response?.ok) {
+          queueNotice(response?.payload?.message ?? "Aether could not create that account.");
+          return;
+        }
+      }
+
+      const loginResponse = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (loginResponse.error) {
+        queueNotice(loginResponse.error.message);
         return;
       }
 
-      const user = response.data.user;
+      const user = loginResponse.data.user;
       if (!user) {
         queueNotice("Aether could not establish a session.");
         return;
@@ -1351,7 +1651,7 @@ export function ChatPlatform() {
 
       setSessionUserId(user.id);
       setSignupAvatarUrl(null);
-      await syncWorkspaceFromSupabase(user.id);
+      await syncWorkspaceFromSupabase(user.id, user);
     });
   }
 
@@ -1393,6 +1693,7 @@ export function ChatPlatform() {
           name: createServerName.trim(),
           description: createServerDescription.trim() || "A private room for your friends.",
           owner_id: currentProfile.id,
+          image_url: serverImageUrl,
           theme: serverTheme,
         })
         .select("*")
@@ -1420,11 +1721,13 @@ export function ChatPlatform() {
         });
 
         await syncWorkspaceFromSupabase(currentProfile.id);
+        setServerSettingsDirty(false);
         setSelectedServerId(serverData.id);
         setSelectedChannelId(channelData?.id ?? "");
         setSelectedDmId("");
         setCreateServerName("");
         setCreateServerDescription("");
+        setServerImageUrl(null);
         queueNotice(`Aether: ${serverData.name} is live with invite code ${serverData.invite_code}.`);
         return;
       }
@@ -1434,6 +1737,7 @@ export function ChatPlatform() {
       createServerName.trim(),
       createServerDescription.trim() || "A private room for your friends.",
       currentProfile.id,
+      serverImageUrl,
     );
 
     patchWorkspace((current) => ({
@@ -1443,11 +1747,13 @@ export function ChatPlatform() {
       memberships: [...current.memberships, seed.membership],
     }));
 
+    setServerSettingsDirty(false);
     setSelectedServerId(seed.server.id);
     setSelectedChannelId(seed.channel.id);
     setSelectedDmId("");
     setCreateServerName("");
     setCreateServerDescription("");
+    setServerImageUrl(null);
     queueNotice(`Aether: ${seed.server.name} is live with invite code ${seed.server.inviteCode}.`);
   }
 
@@ -1477,6 +1783,7 @@ export function ChatPlatform() {
         const payload = await response.json();
         if (payload.ok) {
           await syncWorkspaceFromSupabase(currentProfile.id);
+          setServerSettingsDirty(false);
           setSelectedServerId(payload.serverId ?? selectedServerId);
           setSelectedDmId("");
           setJoinInvite("");
@@ -1521,6 +1828,7 @@ export function ChatPlatform() {
       }));
     }
 
+    setServerSettingsDirty(false);
     setSelectedServerId(server.id);
     setSelectedChannelId(workspace.channels.find((row) => row.serverId === server.id)?.id ?? "");
     setSelectedDmId("");
@@ -1941,6 +2249,7 @@ export function ChatPlatform() {
             <button
               type="button"
               onClick={() => {
+                setServerSettingsDirty(false);
                 setSelectedDmId("");
                 setSelectedServerId("");
                 if (accessibleServers[0]) {
@@ -1959,6 +2268,7 @@ export function ChatPlatform() {
             <button
               type="button"
               onClick={() => {
+                setServerSettingsDirty(false);
                 setSelectedServerId("");
                 setSelectedChannelId("");
                 setSelectedDmId(workspace.dms[0]?.id ?? "");
@@ -1978,12 +2288,12 @@ export function ChatPlatform() {
             <div className="space-y-2">
               {accessibleServers.map((server) => {
                 const selected = server.id === selectedServerId && !selectedDmId;
-                const activeTheme = themeCatalog[server.theme];
                 return (
                   <button
                     key={server.id}
                     type="button"
                     onClick={() => {
+                      setServerSettingsDirty(false);
                       setSelectedServerId(server.id);
                       setSelectedDmId("");
                       const firstChannel = workspace.channels.find(
@@ -1998,14 +2308,13 @@ export function ChatPlatform() {
                         : "border-white/8 bg-white/5 hover:bg-white/10",
                     )}
                   >
-                    <div
-                      className="flex h-12 w-12 items-center justify-center rounded-2xl text-lg font-semibold text-white"
-                      style={{
-                        background: `linear-gradient(135deg, ${activeTheme.accent}, ${activeTheme.glow})`,
-                      }}
-                    >
-                      {server.name.slice(0, 1)}
-                    </div>
+                    <ServerIcon
+                      name={server.name}
+                      imageUrl={server.imageUrl}
+                      theme={server.theme}
+                      className="h-12 w-12"
+                      textClassName="text-lg"
+                    />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-semibold text-white">
                         {server.name}
@@ -2060,6 +2369,48 @@ export function ChatPlatform() {
                 rows={3}
                 className="mb-2 w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
               />
+              <div className="mb-2 rounded-2xl border border-white/10 bg-black/15 p-3">
+                <div className="flex items-center gap-3">
+                  <ServerIcon
+                    name={createServerName || "?"}
+                    imageUrl={serverImageUrl}
+                    theme={workspace.platformSettings.theme}
+                    className="h-12 w-12"
+                    textClassName="text-base"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-white">Server picture</div>
+                    <div className="text-xs leading-6 text-white/45">
+                      Optional. It appears in the server list and header.
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white transition hover:bg-white/10">
+                    <ImageIcon className="h-4 w-4" />
+                    {serverImageBusy ? "Uploading..." : "Upload picture"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0] ?? null;
+                        await handleServerImageUpload(file);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {serverImageUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => setServerImageUrl(null)}
+                      className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70 transition hover:bg-white/10"
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={createServer}
@@ -2077,6 +2428,15 @@ export function ChatPlatform() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.28em] text-white/45">
                 {selectedDmId ? <MessageSquareMore className="h-3.5 w-3.5" /> : <Hash className="h-3.5 w-3.5" />}
+                {!selectedDmId && currentServer ? (
+                  <ServerIcon
+                    name={currentServer.name}
+                    imageUrl={currentServer.imageUrl}
+                    theme={currentServer.theme}
+                    className="h-4 w-4 rounded-md"
+                    textClassName="text-[10px]"
+                  />
+                ) : null}
                 <span>
                   {selectedDmId ? "Personal Messages" : currentServer?.name ?? "No server selected"}
                 </span>
@@ -2326,11 +2686,135 @@ export function ChatPlatform() {
                 {currentServer ? (
                   <div className="space-y-3 text-sm text-white/70">
                     <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <div className="text-white">{currentServer.name}</div>
+                      <div className="flex items-center gap-3">
+                        <ServerIcon
+                          name={currentServer.name}
+                          imageUrl={currentServer.imageUrl}
+                          theme={currentServer.theme}
+                          className="h-12 w-12"
+                          textClassName="text-base"
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-white">{currentServer.name}</div>
+                          <div className="mt-1 text-[11px] uppercase tracking-[0.24em] text-white/45">
+                            Server picture
+                          </div>
+                        </div>
+                      </div>
                       <div className="mt-1 text-xs leading-6 text-white/50">
                         {currentServer.description}
                       </div>
                     </div>
+                    {canUseModeratorPanel ? (
+                      <div className="rounded-2xl border border-white/10 bg-black/15 p-3">
+                        <div className="mb-3 flex items-center justify-between text-[11px] uppercase tracking-[0.24em] text-white/45">
+                          <span>Customize server</span>
+                          <Sparkles className="h-3.5 w-3.5" />
+                        </div>
+                        <div className="space-y-2">
+                          <input
+                            value={serverSettingsDraft.name}
+                            onChange={(event) => {
+                              primeServerSettingsDraft();
+                              setServerSettingsName(event.target.value);
+                            }}
+                            placeholder="server name"
+                            className="w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
+                          />
+                          <textarea
+                            value={serverSettingsDraft.description}
+                            onChange={(event) => {
+                              primeServerSettingsDraft();
+                              setServerSettingsDescription(event.target.value);
+                            }}
+                            rows={3}
+                            placeholder="server description"
+                            className="w-full resize-none rounded-2xl border border-white/10 bg-black/25 px-3 py-2 text-sm text-white outline-none placeholder:text-white/30"
+                          />
+                          <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                            <div className="flex items-center gap-3">
+                              <ServerIcon
+                                name={serverSettingsDraft.name || currentServer.name}
+                                imageUrl={serverSettingsDraft.imageUrl}
+                                theme={serverSettingsDraft.theme}
+                                className="h-12 w-12"
+                                textClassName="text-base"
+                              />
+                              <div className="min-w-0">
+                                <div className="text-sm text-white">Server picture and theme</div>
+                                <div className="text-xs leading-6 text-white/45">
+                                  Update the icon and choose the server&apos;s look.
+                                </div>
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white transition hover:bg-white/10">
+                                <ImageIcon className="h-4 w-4" />
+                                {serverSettingsBusy ? "Uploading..." : "Upload picture"}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={async (event) => {
+                                    const file = event.target.files?.[0] ?? null;
+                                    await handleServerSettingsImageUpload(file);
+                                    event.currentTarget.value = "";
+                                  }}
+                                />
+                              </label>
+                              {serverSettingsDraft.imageUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    primeServerSettingsDraft();
+                                    setServerSettingsImageUrl(null);
+                                  }}
+                                  className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70 transition hover:bg-white/10"
+                                >
+                                  Remove picture
+                                </button>
+                              ) : null}
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              {themeKeys.map((theme) => {
+                                const selected = serverSettingsDraft.theme === theme;
+                                return (
+                                  <button
+                                    key={theme}
+                                    type="button"
+                                    onClick={() => {
+                                      primeServerSettingsDraft();
+                                      setServerSettingsTheme(theme);
+                                    }}
+                                    className={cn(
+                                      "rounded-2xl border px-3 py-2 text-left transition",
+                                      selected
+                                        ? "border-white/25 bg-white/10"
+                                        : "border-white/10 bg-black/20 hover:bg-white/10",
+                                    )}
+                                  >
+                                    <div className="text-sm font-semibold text-white">
+                                      {themeCatalog[theme].label}
+                                    </div>
+                                    <div className="mt-1 text-[11px] leading-5 text-white/45">
+                                      {themeCatalog[theme].summary}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void saveServerSettings()}
+                              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-3 py-2 text-sm font-semibold text-black transition hover:scale-[1.01] disabled:opacity-60"
+                            >
+                              <Sparkles className="h-4 w-4" />
+                              Save server settings
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                         <div className="text-[11px] uppercase tracking-[0.26em] text-white/45">
@@ -2354,7 +2838,7 @@ export function ChatPlatform() {
                         <div className="text-[11px] uppercase tracking-[0.26em] text-white/45">
                           Theme
                         </div>
-                        <div className="mt-1 text-white">{themeCatalog[workspace.platformSettings.theme].label}</div>
+                        <div className="mt-1 text-white">{themeCatalog[currentServer.theme].label}</div>
                       </div>
                     </div>
                     <button

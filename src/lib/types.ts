@@ -23,6 +23,7 @@ export type ServerRecord = {
   description: string;
   inviteCode: string;
   ownerId: string;
+  imageUrl?: string | null;
   theme: ThemeKey;
   createdAt: string;
   memberCount: number;

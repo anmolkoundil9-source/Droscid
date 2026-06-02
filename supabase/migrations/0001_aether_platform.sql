@@ -34,6 +34,7 @@ create table if not exists public.servers (
   description text not null default '',
   invite_code text not null unique default upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 10)),
   owner_id uuid not null references public.profiles(id) on delete cascade,
+  image_url text,
   theme text not null default 'night' check (theme in ('night', 'cherry', 'halloween', 'valentine')),
   created_at timestamptz not null default now()
 );

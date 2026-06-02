@@ -17,7 +17,7 @@ export function normalizeUsername(value: string) {
 
 export function usernameToEmail(value: string) {
   const slug = toSlug(value) || "guest";
-  return `${slug}@aether.local`;
+  return `${slug}@droscid.app`;
 }
 
 export function formatDateTime(value: string) {
