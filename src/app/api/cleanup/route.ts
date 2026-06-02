@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
-import { cleanupSecret } from "@/lib/env";
+import { cleanupSecret, cronSecret } from "@/lib/env";
 
-export async function POST(request: NextRequest) {
+function isAuthorized(request: NextRequest) {
+  const expectedSecret = cronSecret || cleanupSecret;
+  if (!expectedSecret) {
+    return false;
+  }
+
+  const authHeader = request.headers.get("authorization");
+  const legacySecret = request.headers.get("x-aether-cleanup-secret");
+  return authHeader === `Bearer ${expectedSecret}` || legacySecret === expectedSecret;
+}
+
+async function handleCleanup(request: NextRequest) {
   try {
-    if (cleanupSecret) {
-      const headerSecret = request.headers.get("x-aether-cleanup-secret");
-      if (headerSecret !== cleanupSecret) {
-        return NextResponse.json({ ok: false, message: "Unauthorized" }, { status: 401 });
-      }
+    if (!isAuthorized(request)) {
+      return NextResponse.json({ ok: false, message: "Unauthorized" }, { status: 401 });
     }
 
     const admin = createAdminSupabaseClient();
@@ -35,4 +43,12 @@ export async function POST(request: NextRequest) {
     const message = error instanceof Error ? error.message : "Unknown cleanup error";
     return NextResponse.json({ ok: false, message }, { status: 500 });
   }
+}
+
+export async function GET(request: NextRequest) {
+  return handleCleanup(request);
+}
+
+export async function POST(request: NextRequest) {
+  return handleCleanup(request);
 }
