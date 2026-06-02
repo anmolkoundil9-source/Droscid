@@ -1943,7 +1943,7 @@ export function ChatPlatform() {
   }
 
   const authScreen = (
-    <div className="relative mx-auto flex min-h-screen w-full max-w-7xl items-stretch gap-6 p-4 md:p-6">
+    <div className="relative mx-auto flex min-h-screen w-full max-w-[88rem] items-stretch gap-8 p-3 sm:p-4 md:p-6">
       <div className="panel relative hidden flex-1 overflow-hidden rounded-[36px] p-8 lg:block">
         <div className="absolute inset-0 soft-grid opacity-25" />
         <div className="absolute left-6 top-6 h-48 w-48 rounded-full bg-[radial-gradient(circle,rgba(255,120,185,0.35),transparent_70%)] blur-2xl" />
@@ -1973,7 +1973,7 @@ export function ChatPlatform() {
         </div>
       </div>
 
-      <div className="panel relative flex w-full max-w-xl flex-col overflow-hidden rounded-[36px] p-6 md:p-8">
+      <div className="panel relative flex w-full max-w-[42rem] flex-col overflow-hidden rounded-[36px] p-6 md:p-8">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(180,140,255,0.24),transparent_42%)]" />
         <div className="relative z-10 space-y-8">
           <div>
@@ -1996,7 +1996,7 @@ export function ChatPlatform() {
             </div>
           </div>
 
-          <div className="grid gap-4 rounded-[28px] border border-white/10 bg-white/5 p-5">
+          <div className="grid gap-5 rounded-[28px] border border-white/10 bg-white/5 p-5 md:p-6">
             <div className="flex gap-2 rounded-full border border-white/10 bg-black/20 p-1 text-sm">
               <button
                 type="button"
@@ -2175,8 +2175,8 @@ export function ChatPlatform() {
         </div>
       ) : null}
 
-      <div className="relative mx-auto grid min-h-screen max-w-[1600px] gap-4 p-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:p-5">
-        <aside className="panel relative flex min-h-[calc(100vh-2rem)] flex-col rounded-[32px] p-4 lg:p-5">
+      <div className="relative mx-auto grid min-h-screen max-w-[1760px] gap-5 p-3 sm:p-4 md:p-5 lg:grid-cols-[300px_minmax(0,1fr)_380px] lg:gap-6 lg:p-6">
+        <aside className="panel relative flex min-h-[calc(100vh-2rem)] flex-col rounded-[32px] p-4 lg:p-6">
           <div className="mb-5 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,var(--accent),var(--accent-2))] text-black shadow-lg">
@@ -2473,7 +2473,7 @@ export function ChatPlatform() {
             </div>
           </div>
 
-          <div className="grid min-h-0 flex-1 gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_340px] lg:p-5">
+          <div className="grid min-h-0 flex-1 gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-6 lg:p-6">
             <section className="panel-strong flex min-h-0 flex-col rounded-[28px]">
               <div className="flex-1 overflow-auto px-5 py-5 scrollbar-thin lg:px-6">
                 {recentMessages.length ? (
@@ -2681,7 +2681,7 @@ export function ChatPlatform() {
               </div>
             </section>
 
-            <aside className="flex min-h-0 flex-col gap-4 overflow-hidden">
+            <aside className="flex min-h-0 flex-col gap-5 overflow-hidden">
               <SectionCard title="Server status" icon={<Shield className="h-3.5 w-3.5" />}>
                 {currentServer ? (
                   <div className="space-y-3 text-sm text-white/70">
